@@ -46,6 +46,58 @@ function writeExecutionLog_(status, count, message) {
 }
 
 /**
+ * exportRakutenRankings関数を毎日指定された時間帯に実行する時間主導型トリガーを設定します。
+ * 重複登録を防ぐため、既存の同一関数用トリガーはすべて削除してから新規登録します。
+ * 
+ * @param {number} [hour=9] 実行時間帯（0〜23の整数。例: 9 を指定すると 9:00〜10:00 の間に実行）
+ */
+function setDailyTrigger(hour = 10) {
+  try {
+    // 1. 既存の同一関数に対するトリガーを削除（重複防止）
+    deleteDailyTrigger();
+
+    // 2. 毎日指定された時間に実行するトリガーを新規作成
+    ScriptApp.newTrigger('exportRakutenRankings')
+             .timeBased()
+             .everyDays(1)
+             .atHour(hour)
+             .create();
+
+    console.log(`✅ 定期実行トリガーを設定しました。毎日 ${hour}:00〜${hour + 1}:00 の間に実行されます。`);
+  } catch (e) {
+    console.error(`トリガー設定中にエラーが発生しました (setDailyTrigger): ${e.message}`);
+    throw e;
+  }
+}
+
+/**
+ * 現在登録されている exportRakutenRankings関数用の定期実行トリガーをすべて削除します。
+ */
+function deleteDailyTrigger() {
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    let deleteCount = 0;
+
+    for (let i = 0; i < triggers.length; i++) {
+      const trigger = triggers[i];
+      if (trigger.getHandlerFunction() === 'exportRakutenRankings') {
+        ScriptApp.deleteTrigger(trigger);
+        deleteCount++;
+      }
+    }
+
+    if (deleteCount > 0) {
+      console.log(`🧹 既存のトリガー（関数: exportRakutenRankings）を ${deleteCount} 件削除しました。`);
+    } else {
+      console.log('ℹ️ 削除対象の既存トリガーは見つかりませんでした。');
+    }
+  } catch (e) {
+    console.error(`トリガー削除中にエラーが発生しました (deleteDailyTrigger): ${e.message}`);
+    throw e;
+  }
+}
+
+/**
  * 【テスト】APIの一時エラーおよび通信例外に対するリトライ挙動検証用テスト関数
  * * 意図的に 503 エラーを返すテスト用URLおよび存在しないドメインへのリクエストを行い、
  * 最大3回・2秒間隔でリトライ（再試行）が実行されることをログ出力で検証します。
@@ -106,4 +158,60 @@ function testWriteLog() {
     console.error(`❌ testWriteLog 失敗: ${error.message}`);
   }
   console.log('--- testWriteLog 終了 ---');
+}
+
+/**
+ * 【テスト】定期実行トリガーの設定・削除機能の動作検証用テスト関数
+ * トリガーを一時的に作成し、正しくプロジェクトに登録されているか検証した上で、
+ * 自動でトリガーを削除してクリーンアップします。
+ */
+function testTriggerSetup() {
+  console.log('--- testTriggerSetup 開始 ---');
+  try {
+    const testHour = 3; // テスト用に朝3時設定
+    
+    // 1. トリガーを設定
+    setDailyTrigger(testHour);
+    
+    // 2. 登録されているか検証
+    const triggers = ScriptApp.getProjectTriggers();
+    let foundTrigger = null;
+    for (let i = 0; i < triggers.length; i++) {
+      const trigger = triggers[i];
+      if (trigger.getHandlerFunction() === 'exportRakutenRankings') {
+        foundTrigger = trigger;
+        break;
+      }
+    }
+    
+    if (foundTrigger) {
+      console.log(`✅ トリガー登録検証成功: 関数「${foundTrigger.getHandlerFunction()}」が「${foundTrigger.getEventType()}」イベントとして登録されています。`);
+    } else {
+      throw new Error('テスト失敗: トリガーがプロジェクトに登録されていません。');
+    }
+    
+    // 3. クリーンアップ（テストで作成したトリガーを削除）
+    deleteDailyTrigger();
+    
+    // 削除確認
+    const postTriggers = ScriptApp.getProjectTriggers();
+    let deletedSuccessfully = true;
+    for (let i = 0; i < postTriggers.length; i++) {
+      if (postTriggers[i].getHandlerFunction() === 'exportRakutenRankings') {
+        deletedSuccessfully = false;
+        break;
+      }
+    }
+    
+    if (deletedSuccessfully) {
+      console.log('✅ トリガー削除検証成功: テスト用トリガーが正常に削除されました。');
+      console.log('✅ testTriggerSetup: すべての検証項目をクリアしました！');
+    } else {
+      throw new Error('テスト失敗: トリガーの削除処理が正常に行われませんでした。');
+    }
+    
+  } catch (error) {
+    console.error(`❌ testTriggerSetup 失敗: ${error.message}`);
+  }
+  console.log('--- testTriggerSetup 終了 ---');
 }
