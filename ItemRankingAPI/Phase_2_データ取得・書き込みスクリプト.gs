@@ -163,14 +163,21 @@ function writeRankingToGenreSheet_(values, genreName) {
 /**
  * 楽天ランキングデータ取得・書き込みのメイン実行関数
  * 設定シートから有効な全ジャンルの情報を取得し、APIを巡回して各ランキングシートを更新します。
+ * 実行結果は「実行ログ」シートに自動記録されます。
  */
 function exportRakutenRankings() {
   console.log('🚀 楽天ランキング取得・更新バッチ処理を開始します...');
+  let totalCount = 0;
+  let status = 'SUCCESS';
+  let executionMessage = '正常終了';
+
   try {
     // 1. 有効なジャンル設定を取得
     const settings = getActiveGenreSettings_();
     if (!settings || settings.length === 0) {
-      console.warn('⚠️ 有効なジャンル設定が「設定」シートに登録されていません。処理を中断します。');
+      const warnMsg = '有効なジャンル設定が「設定」シートに登録されていません。';
+      console.warn(`⚠️ ${warnMsg}`);
+      writeExecutionLog_('SUCCESS', 0, warnMsg);
       return;
     }
 
@@ -190,8 +197,10 @@ function exportRakutenRankings() {
         
         // スプレッドシートに書き込み
         writeRankingToGenreSheet_(values, setting.genreName);
+        totalCount += values.length;
       } else {
-        console.error(`❌ ジャンル「${setting.genreName}」のデータ取得に失敗したため、書き込みをスキップします。`);
+        // API取得失敗時はエラーを投げ、ログにエラーを残すようにします
+        throw new Error(`ジャンル「${setting.genreName}」のデータ取得に失敗しました（データが空、または通信エラー）。`);
       }
 
       // 楽天APIの負荷低減（レート制限対策）のため、ループの間に1秒スリープを挟む
@@ -202,8 +211,13 @@ function exportRakutenRankings() {
     }
     
     console.log('\n✨ すべてのジャンルのランキングデータ更新処理が正常に終了しました。');
+    writeExecutionLog_(status, totalCount, executionMessage);
+
   } catch (e) {
+    status = 'ERROR';
+    executionMessage = e.message;
     console.error(`❌ バッチ処理中に重大なエラーが発生しました: ${e.message}`);
+    writeExecutionLog_(status, totalCount, executionMessage);
   }
 }
 
