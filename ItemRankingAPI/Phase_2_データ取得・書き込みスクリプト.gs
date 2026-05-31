@@ -154,13 +154,14 @@ function writeRankingToGenreSheet_(values, genreName) {
  * 設定シートから有効な全ジャンルの情報を取得し、APIを巡回して各ランキングシートを更新します。
  * 実行結果は「実行ログ」シートに自動記録されます。
  * * [変更履歴]
- * 2026/05/31: 一部のジャンルでAPI取得失敗・例外が発生してもループを中断せず、ログに記録して後続処理を継続(continue)するように改善。
+ * 2026/05/31: 失敗ジャンルをfailedGenres配列で収集し、全失敗/一部失敗/成功をERROR/PARTIAL_ERROR/SUCCESSの3ステータスで記録するよう修正。
  */
 function exportRakutenRankings() {
   console.log('🚀 楽天ランキング取得・更新バッチ処理を開始します...');
   let totalCount = 0;
   let status = 'SUCCESS';
   let executionMessage = '正常終了';
+  const failedGenres = []; // 失敗したジャンル名を収集するリスト
 
   try {
     // 1. 有効なジャンル設定を取得
@@ -194,8 +195,8 @@ function exportRakutenRankings() {
         } else {
           // API取得失敗時（データが空、または通信エラー等で空配列が返却された場合）
           console.error(`❌ ジャンル「${setting.genreName}」のデータ取得に失敗しました。`);
-          status = 'ERROR';
-          executionMessage = `一部のジャンル（例: ${setting.genreName}）の取得に失敗しました。`;
+
+          failedGenres.push(setting.genreName);
           
           // 後続の書き込み処理やスリープをスキップし、次のジャンルのループへ進む
           continue;
@@ -203,8 +204,8 @@ function exportRakutenRankings() {
       } catch (genreError) {
         // fetchRakutenRanking_ 等の内部処理で例外（例外エラー）がスローされた場合
         console.error(`❌ ジャンル「${setting.genreName}」の処理中にエラーが発生しました: ${genreError.message}`);
-        status = 'ERROR';
-        executionMessage = `一部のジャンル（例: ${setting.genreName}）の取得に失敗しました。`;
+
+        failedGenres.push(setting.genreName);
         
         // エラーを記録した上で、次のジャンルへ継続
         continue;
@@ -218,6 +219,13 @@ function exportRakutenRankings() {
     }
     
     console.log('\n✨ すべてのジャンルのランキングデータ更新処理が終了しました。');
+
+    // 失敗ジャンルの件数に応じてステータスとメッセージを確定する
+    if (failedGenres.length > 0) {
+      status = failedGenres.length === settings.length ? 'ERROR' : 'PARTIAL_ERROR';
+      executionMessage = `失敗ジャンル (${failedGenres.length}件): ${failedGenres.join(', ')}`;
+    }
+
     writeExecutionLog_(status, totalCount, executionMessage);
   } catch (e) {
     status = 'ERROR';
