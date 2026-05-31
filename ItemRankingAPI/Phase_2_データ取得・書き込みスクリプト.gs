@@ -75,8 +75,12 @@ function transformRankingData_(items, genreId, limitCount) {
     return [];
   }
 
+  // 順位（rank）の昇順でソート（1位から30位へ並び替え）
+  // 元のitems配列を破壊しないようスプレッド構文でコピーしてからソートします
+  const sortedItems = [...items].sort((a, b) => (a.rank || 0) - (b.rank || 0));
+
   // 設定された取得件数にスライス
-  const targetItems = items.slice(0, limitCount);
+  const targetItems = sortedItems.slice(0, limitCount);
   const timestamp = new Date();
 
   // 各行を二次元配列にマッピング
