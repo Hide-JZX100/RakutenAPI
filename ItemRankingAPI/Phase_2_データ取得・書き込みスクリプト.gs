@@ -98,6 +98,112 @@ function transformRankingData_(items, genreId, limitCount) {
 }
 
 /**
+ * 指定された二次元配列のランキングデータを、ジャンル名のシートへ書き込みます。
+ * シートが存在しない場合は新規作成し、ヘッダーを設定します。
+ * 既に存在する場合は、古いデータをクリアした上で上書き保存します。
+ * 
+ * @param {Array[]} values 書き込み用二次元配列（データ行のみ）
+ * @param {string} genreName ジャンル名（シート名になります）
+ * @private
+ */
+function writeRankingToGenreSheet_(values, genreName) {
+  try {
+    const ss = getTargetSpreadsheet_();
+    let sheet = ss.getSheetByName(genreName);
+    
+    const headers = [
+      '取得日時', '順位', '商品名', 'キャッチコピー', '価格', 
+      '商品URL', 'レビュー数', '評点', 'ショップ名', '在庫', 'ジャンルID'
+    ];
+
+    if (!sheet) {
+      // シートが存在しない場合は新規追加
+      sheet = ss.insertSheet(genreName);
+      
+      // ヘッダー行を設定
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      
+      // ヘッダーのデザイン調整（太字、背景色：薄い緑、中央揃え）
+      sheet.getRange(1, 1, 1, headers.length)
+           .setBackground('#E5F3E5') // 薄い緑
+           .setFontWeight('bold')
+           .setHorizontalAlignment('center');
+      
+      console.log(`✅ 新規にランキングシート「${genreName}」を作成しました。`);
+    } else {
+      // 既存シートがある場合は、2行目以降の既存データ行をすべてクリア
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) {
+        // A2から最終列・最終行の範囲をクリア
+        sheet.getRange(2, 1, lastRow - 1, headers.length).clearContent();
+      }
+      console.log(`🧹 既存の「${genreName}」シートのデータをクリアしました。`);
+    }
+
+    if (values && values.length > 0) {
+      // 2行目から二次元配列データを一括書き込み
+      sheet.getRange(2, 1, values.length, headers.length).setValues(values);
+      
+      // 列幅の自動調整
+      sheet.autoResizeColumns(1, headers.length);
+      console.log(`💾 「${genreName}」シートに ${values.length} 件のランキングデータを書き込みました。`);
+    } else {
+      console.warn(`⚠️ 「${genreName}」シートに書き込むデータがありませんでした。`);
+    }
+  } catch (e) {
+    console.error(`エラーが発生しました (writeRankingToGenreSheet_): ${e.message}`);
+    throw e;
+  }
+}
+
+/**
+ * 楽天ランキングデータ取得・書き込みのメイン実行関数
+ * 設定シートから有効な全ジャンルの情報を取得し、APIを巡回して各ランキングシートを更新します。
+ */
+function exportRakutenRankings() {
+  console.log('🚀 楽天ランキング取得・更新バッチ処理を開始します...');
+  try {
+    // 1. 有効なジャンル設定を取得
+    const settings = getActiveGenreSettings_();
+    if (!settings || settings.length === 0) {
+      console.warn('⚠️ 有効なジャンル設定が「設定」シートに登録されていません。処理を中断します。');
+      return;
+    }
+
+    // 2. ジャンルごとに巡回
+    for (let i = 0; i < settings.length; i++) {
+      const setting = settings[i];
+      console.log(`\n--- [${i + 1}/${settings.length}] ジャンル: ${setting.genreName} (ID: ${setting.genreId}) の処理を開始 ---`);
+      
+      // APIからデータを取得 (テストのため1ページ目＝30位まで)
+      console.log('楽天APIからデータを取得中...');
+      const items = fetchRakutenRanking_(setting.genreId, 1);
+      
+      if (items && items.length > 0) {
+        // 取得したデータを二次元配列に変換＆取得件数にスライス
+        console.log('データを整形中...');
+        const values = transformRankingData_(items, setting.genreId, setting.limitCount);
+        
+        // スプレッドシートに書き込み
+        writeRankingToGenreSheet_(values, setting.genreName);
+      } else {
+        console.error(`❌ ジャンル「${setting.genreName}」のデータ取得に失敗したため、書き込みをスキップします。`);
+      }
+
+      // 楽天APIの負荷低減（レート制限対策）のため、ループの間に1秒スリープを挟む
+      if (i < settings.length - 1) {
+        console.log('次のジャンル取得まで1秒間待機します...');
+        Utilities.sleep(1000);
+      }
+    }
+    
+    console.log('\n✨ すべてのジャンルのランキングデータ更新処理が正常に終了しました。');
+  } catch (e) {
+    console.error(`❌ バッチ処理中に重大なエラーが発生しました: ${e.message}`);
+  }
+}
+
+/**
  * 【テスト】getActiveGenreSettings_関数の動作検証用テスト関数
  * 現在の「設定」シートから有効な設定データを正常に読み込み、
  * ログに出力して構造を検証します。
@@ -161,7 +267,8 @@ function testFetchAndTransform() {
       // 件数の一致確認
       const expectedLength = Math.min(items.length, testSetting.limitCount);
       if (values.length !== expectedLength) {
-        throw new Error(`テスト失敗: 変換後の行数(${values.length})が、期待される件数(${expectedLength})と一致しません。`);
+        throw new Error(`テスト失敗: 変換後の行数(${values.length})` + 
+                         `が、期待される件数(${expectedLength})と一致しません。`);
       }
       console.log('✅ testFetchAndTransform: 二次元配列への変換および件数制限スライスが正常に動作しました！');
     } else {
@@ -172,4 +279,15 @@ function testFetchAndTransform() {
     console.error(`❌ testFetchAndTransform 失敗: ${error.message}`);
   }
   console.log('--- testFetchAndTransform 終了 ---');
+}
+
+/**
+ * 【テスト】exportRakutenRankings関数の結合動作検証用テスト関数
+ * メインのバッチ処理を実行し、実際にシートが自動作成・上書きされ、
+ * ランキングデータが綺麗に格納されるかを確認します。
+ */
+function testExportRankings() {
+  console.log('--- testExportRankings（結合テスト） 開始 ---');
+  exportRakutenRankings();
+  console.log('--- testExportRankings（結合テスト） 終了 ---');
 }
