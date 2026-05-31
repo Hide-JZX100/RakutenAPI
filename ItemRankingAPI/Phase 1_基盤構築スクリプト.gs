@@ -163,14 +163,15 @@ function testInitializeSettingSheet() {
 }
 
 /**
- * 楽天商品ランキングAPIを呼び出してデータを取得する内部関数
+ * 楽天商品ランキングAPIを呼び出してデータを取得する内部関数（リトライ機能付き）
  * 
  * @param {number} genreId ジャンルID
  * @param {number} page ページ番号（1〜34）
+ * @param {string} [endpoint=RAKUTEN_API_ENDPOINT] 接続先のエンドポイントURL（テスト差し替え用）
  * @returns {Object[]|null} 商品データの配列。エラー発生時は null を返します。
  * @private
  */
-function fetchRakutenRanking_(genreId, page) {
+function fetchRakutenRanking_(genreId, page, endpoint = RAKUTEN_API_ENDPOINT) {
   let applicationId;
   let accessKey;
   try {
@@ -184,7 +185,7 @@ function fetchRakutenRanking_(genreId, page) {
   // スクリプトプロパティからリファラ用のURLを取得（未設定時はデフォルトのGASドメインを使用）
   const registeredAppUrl = PropertiesService.getScriptProperties().getProperty('RAKUTEN_APP_URL') || 'https://script.google.com/';
 
-  const url = `${RAKUTEN_API_ENDPOINT}?applicationId=${applicationId}&accessKey=${accessKey}&genreId=${genreId}&page=${page}&formatVersion=2`;
+  const url = `${endpoint}?applicationId=${applicationId}&accessKey=${accessKey}&genreId=${genreId}&page=${page}&formatVersion=2`;
 
   const options = {
     method: 'get',
@@ -197,55 +198,75 @@ function fetchRakutenRanking_(genreId, page) {
     muteHttpExceptions: true // エラー時のレスポンスコードを取得するため有効化
   };
 
-  try {
-    const response = UrlFetchApp.fetch(url, options);
-    const responseCode = response.getResponseCode();
+  const maxRetries = 3;
+  const retryIntervalMs = 2000; // リトライ間隔: 2秒
 
-    if (responseCode === 200) {
-      const data = JSON.parse(response.getContentText());
-      
-      let rawItems = [];
-      // レスポンスの主要構造の抽出
-      if (data && data.Items && Array.isArray(data.Items)) {
-        rawItems = data.Items;
-      } else if (data && data.Products && Array.isArray(data.Products)) {
-        rawItems = data.Products;
-      } else if (Array.isArray(data)) {
-        rawItems = data;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = UrlFetchApp.fetch(url, options);
+      const responseCode = response.getResponseCode();
+
+      if (responseCode === 200) {
+        const data = JSON.parse(response.getContentText());
+        
+        let rawItems = [];
+        // レスポンスの主要構造の抽出
+        if (data && data.Items && Array.isArray(data.Items)) {
+          rawItems = data.Items;
+        } else if (data && data.Products && Array.isArray(data.Products)) {
+          rawItems = data.Products;
+        } else if (Array.isArray(data)) {
+          rawItems = data;
+        } else {
+          console.warn('APIの応答構造が想定と異なります。返却データ:', JSON.stringify(data).substring(0, 200));
+          return null;
+        }
+
+        // レスポンスの正規化処理（ネスト構造 Items[i].Item.itemName もフラット構造にマッピング）
+        return rawItems.map(item => {
+          const target = (item && item.Item) ? item.Item : item;
+          
+          return {
+            rank: target.rank || null,
+            itemName: target.itemName || null,
+            catchcopy: target.catchcopy || null,
+            itemCode: target.itemCode || null,
+            itemPrice: target.itemPrice ? Number(target.itemPrice) : null,
+            itemUrl: target.itemUrl || null,
+            reviewCount: target.reviewCount ? Number(target.reviewCount) : null,
+            reviewAverage: target.reviewAverage ? Number(target.reviewAverage) : null,
+            shopName: target.shopName || null,
+            shopUrl: target.shopUrl || null,
+            availability: target.availability !== undefined ? Number(target.availability) : null,
+            genreId: target.genreId || null
+          };
+        });
+
+      } else if (responseCode === 429 || responseCode >= 500) {
+        // 429 (Too Many Requests) または 5xx (Server Error) は一時的エラーとしてリトライ対象にする
+        console.warn(`⚠️ APIから一時的なエラーが返却されました。ステータスコード: ${responseCode} (試行 ${attempt}/${maxRetries}回目)`);
+        if (attempt < maxRetries) {
+          console.log(`${retryIntervalMs / 1000}秒後に再試行します...`);
+          Utilities.sleep(retryIntervalMs);
+        }
       } else {
-        console.warn('APIの応答構造が想定と異なります。返却データ:', JSON.stringify(data).substring(0, 200));
+        // 403や400などのクライアント設定エラーはリトライしても解決しないため、即時終了する
+        console.error(`❌ 楽天APIリクエスト失敗。ステータスコード: ${responseCode}`);
+        console.error(`エラー詳細: ${response.getContentText()}`);
         return null;
       }
-
-      // レスポンスの正規化処理（ネスト構造 Items[i].Item.itemName もフラット構造にマッピング）
-      return rawItems.map(item => {
-        const target = (item && item.Item) ? item.Item : item;
-        
-        return {
-          rank: target.rank || null,
-          itemName: target.itemName || null,
-          catchcopy: target.catchcopy || null,
-          itemCode: target.itemCode || null,
-          itemPrice: target.itemPrice ? Number(target.itemPrice) : null,
-          itemUrl: target.itemUrl || null,
-          reviewCount: target.reviewCount ? Number(target.reviewCount) : null,
-          reviewAverage: target.reviewAverage ? Number(target.reviewAverage) : null,
-          shopName: target.shopName || null,
-          shopUrl: target.shopUrl || null,
-          availability: target.availability !== undefined ? Number(target.availability) : null,
-          genreId: target.genreId || null
-        };
-      });
-
-    } else {
-      console.error(`❌ 楽天APIリクエスト失敗。ステータスコード: ${responseCode}`);
-      console.error(`エラー詳細: ${response.getContentText()}`);
-      return null;
+    } catch (e) {
+      // ネットワーク切断やUrlFetchApp自体の通信タイムアウト時の例外ハンドリング
+      console.error(`⚠️ 通信中に例外が発生しました (試行 ${attempt}/${maxRetries}回目): ${e.message}`);
+      if (attempt < maxRetries) {
+        console.log(`${retryIntervalMs / 1000}秒後に再試行します...`);
+        Utilities.sleep(retryIntervalMs);
+      }
     }
-  } catch (e) {
-    console.error(`ネットワーク・または通信エラーが発生しました: ${e.message}`);
-    return null;
   }
+
+  console.error(`❌ 最大リトライ回数 (${maxRetries}回) に達したため、データ取得に失敗しました。`);
+  return null;
 }
 
 /**
