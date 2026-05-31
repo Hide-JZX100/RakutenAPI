@@ -9,6 +9,43 @@
  */
 
 /**
+ * スプレッドシートの「実行ログ」シートに実行結果を1行追記します。
+ * シートが存在しない場合は、ヘッダーを設定して新規作成します。
+ * 
+ * @param {string} status 実行ステータス（'SUCCESS' または 'ERROR'）
+ * @param {number} count 取得・処理に成功した総商品件数
+ * @param {string} message 実行メッセージまたはエラー詳細
+ * @private
+ */
+function writeExecutionLog_(status, count, message) {
+  try {
+    const ss = getTargetSpreadsheet_();
+    let logSheet = ss.getSheetByName('実行ログ');
+    
+    const headers = ['実行日時', 'ステータス', '取得件数', 'メッセージ / エラー詳細'];
+    
+    if (!logSheet) {
+      logSheet = ss.insertSheet('実行ログ');
+      logSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      logSheet.getRange(1, 1, 1, headers.length)
+              .setBackground('#F3F4F6') // 薄いグレー
+              .setFontWeight('bold')
+              .setHorizontalAlignment('center');
+      logSheet.autoResizeColumns(1, headers.length);
+      console.log('✅ 「実行ログ」シートを新規に作成しました。');
+    }
+    
+    // ログ行の追記
+    const timestamp = new Date();
+    logSheet.appendRow([timestamp, status, count, message]);
+    
+    console.log(`📝 実行ログを記録しました。ステータス: ${status}, 件数: ${count}`);
+  } catch (e) {
+    console.error(`実行ログの書き込みに失敗しました: ${e.message}`);
+  }
+}
+
+/**
  * 【テスト】APIの一時エラーおよび通信例外に対するリトライ挙動検証用テスト関数
  * * 意図的に 503 エラーを返すテスト用URLおよび存在しないドメインへのリクエストを行い、
  * 最大3回・2秒間隔でリトライ（再試行）が実行されることをログ出力で検証します。
@@ -53,4 +90,20 @@ function testApiRetryBehavior() {
   }
 
   console.log('\n--- testApiRetryBehavior 終了 ---');
+}
+
+/**
+ * 【テスト】writeExecutionLog_関数の動作検証用テスト関数
+ * 実行ログの書き込みを行い、正常に「実行ログ」シートへ追記されるかをテストします。
+ */
+function testWriteLog() {
+  console.log('--- testWriteLog 開始 ---');
+  try {
+    writeExecutionLog_('SUCCESS', 99, 'テスト実行ログ（正常終了テスト）');
+    writeExecutionLog_('ERROR', 0, 'テスト実行ログ（エラー発生テスト）：APIタイムアウトを想定');
+    console.log('✅ testWriteLog: 「実行ログ」シートへのテスト書き込みが完了しました。');
+  } catch (error) {
+    console.error(`❌ testWriteLog 失敗: ${error.message}`);
+  }
+  console.log('--- testWriteLog 終了 ---');
 }
